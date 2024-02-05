@@ -1,10 +1,12 @@
 # use the names variable to store your list of file names
-names = []
-
+names = ['ADrep1subsample', 'P0rep1subsample', 'ADrep2subsample', 'P0rep2subsample', 
+		'P4rep1subsample', 'P4rep2subsample', 'P7rep1subsample', 'P7rep2subsample']
+readpairs = ['R1', 'R2']
 # your snakemake rule should produce the output from MultiQC and if you link your rules inputs
 # and outputs, you should only have one file listed in your rule all
 rule all:
 	input:
+		expand('results/{sample}_{readpair}_fastqc.html', sample=names , readpair=readpairs)
 
 # make sure to read the fastqc manual to get a sense for appropriate running command
 # we have given you the basic structure of the snakemake rule to get you used to how they
@@ -18,6 +20,7 @@ rule fastqc:
 		outdir = 'results/'
 	shell:
 		'''
+		fastqc {input.fastq} -o {params.outdir}
 		'''
 
 # remember that you want multiqc to run only after fastqc has run on all the files
