@@ -1,3 +1,4 @@
+# purpose: basic quality control
 # use the names variable to store your list of file names
 names = ['ADrep1subsample', 'P0rep1subsample', 'ADrep2subsample', 'P0rep2subsample', 
 		'P4rep1subsample', 'P4rep2subsample', 'P7rep1subsample', 'P7rep2subsample']
