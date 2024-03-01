@@ -1,3 +1,78 @@
 # Use this file and construct your own snakefile that successfully creates a workflow
 # for this week's tasks. We have provided you a visual representation of what it should
 # look like in the assigment. 
+# Goals: 
+# count the alignments falling into regions of interest in the mouse genome
+# sum the alignments falling into all exons of a given gene to obtain "gene-level"
+#   count of mRNA abundance for all genes in each sample
+# concatenate all of the 8 outputs from VERSE into a single counts matrix
+# filter counts matrix and generate new filtered matrix to use for DE analysis
+# parse GTF file and extract mappings of gene IDs to gene symbols
+
+NAMES = ['P0rep1', 'P0rep2', 'P4rep1', 'P4rep2', 'P7rep1', 'P7rep2', 'ADrep1','ADrep2']
+
+rule all:
+    input:
+        'results/full_verse_concat_filtered.csv',
+        'results/full_id2gene.txt'
+
+# run verse for all 8 samples
+#   count the alignments falling into regions of interest in the mouse genome
+#   sum the alignments falling into all exons of a given gene to obtain "gene-level"
+#       count of mRNA abundance for all genes in each sample
+#   VERSE will do this for every gene and generate a single file with two columns: 
+#       one representing the names / ids of all of the genes in the m39 reference 
+#       and other column will be the corresponding “gene-level” count for those genes.
+rule verse:
+    input:
+        bam = 'results/{name}.Aligned.out.bam',
+        gtf = 'results/gencode.vM33.primary_assembly.annotation.gtf'
+    output:
+        verse_exons = 'results/{name}.exon.txt'
+    params:
+        prefix = 'results/{name}'
+    shell:
+        '''
+        # -S for paired end reads not sorted by names
+        # -a annotation file name (gtf file)
+        # -o output file general name, prefix only
+        # VERSE will automatically remove file extension from bam and add .exon.txt
+        verse -S -a {input.gtf} -o {params.prefix} {input.bam}
+        '''
+
+# generating a counts matrix
+# use python script concat_df.py to concatenate results of verse together
+rule concat_verse:
+    input:
+        # expand to instruct snakemake to wait until all 8 .exon.txt filrs exist
+        mats = expand('results/{name}.exon.txt', name=NAMES)
+    output:
+        concat = 'results/full_verse_concat.csv'
+    shell:
+        '''
+        python concat_df.py -i {input.mats} -o {output.concat}
+        '''
+
+# filter the counts matrix in filter_cts rule
+# use python script filter_cts_mat.py
+rule filter_cts:
+    input:
+        verse_mat = 'results/full_verse_concat.csv'
+    output:
+        filter = 'results/full_verse_concat_filtered.csv'
+    shell:
+        '''
+        python filter_cts_mat.py -i {input.verse_mat} -o {output.filter}
+        '''
+
+# develop script that will parse gtf file, needs decompressed GTF file
+# use python script parse_gtf.py
+rule txn_mapping:
+    input:
+        gtf = 'results/gencode.vM33.primary_assembly.annotation.gtf'
+    output:
+        mapping = 'results/full_id2gene.txt'
+    shell:
+        '''
+        python parse_gtf.py -i {input.gtf} -o {output.mapping}
+        '''
