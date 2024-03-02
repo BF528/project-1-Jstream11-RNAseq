@@ -3,5 +3,60 @@ title: "Differential Expression"
 output: html_document
 ---
 
+
 Use this notebook to perform differential expression and all other post-DE
-analyses. 
+analyses.
+
+```
+library('tidyverse')
+library('DESeq2')
+
+make_counts <- function(filename){
+  # read in counts matrix
+  counts <- read_csv(filename)
+
+  rowData <- counts['gene']
+  
+  counts_matrix <- as.matrix(counts[, -1])
+  rownames(counts_matrix) <- rowData$gene
+  return(counts_matrix)
+}
+
+make_colData <- function(counts) {
+  #make coldata
+  coldata <- data.frame(
+    samples = colnames(counts), 
+    time = c(rep('P0', 2), rep('P4', 2), rep('P7', 2),rep('AD',2)),
+    row.names='samples')
+  coldata$time <- as.factor(coldata$time)
+  coldata$time <- relevel(coldata$time, ref='P0')
+  
+  return(coldata)
+}
+
+
+# make counts matrix
+counts_matrix <- make_counts('results/full_verse_concat_filtered.csv')
+
+#make column data matrix
+coldata <- make_colData(counts_matrix)
+
+# Run DESeq, comparing p0 and AD timepoints and generate a tibble containing the results
+dds <- DESeqDataSetFromMatrix(countData = counts_matrix, colData = coldata, design = ~time)
+dds <- DESeq(dds)
+res <- results(dds, contrast=c('time', 'AD', 'P0'))
+
+  # order results by pval
+resOrdered <- res[order(res$pvalue),] %>% 
+  as_tibble(rownames='geneids')
+
+# read in id2gene file
+id2gene <- read_delim('results/full_id2gene.txt', col_names=c('geneids', 'genenames'), sep="\t)
+
+# Join the gene names into the results tibble while preserving all of the original information in the results
+resWGeneid <- resOrdered %>% 
+  left_join(id2gene, by='geneids') %>% 
+  select(geneids, genenames, padj, log2FoldChange)
+
+```
+
