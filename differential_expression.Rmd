@@ -7,10 +7,17 @@ output: html_document
 Use this notebook to perform differential expression and all other post-DE
 analyses.
 
-```
+importing needed libraries.
+``` {r}
 library('tidyverse')
 library('DESeq2')
+library('fgsea')
+library('ggplot2')
+library('gridExtra')
+```
 
+functions to make counts matrix and colData for DESeq
+```{r}
 make_counts <- function(filename){
   # read in counts matrix
   counts <- read_csv(filename)
@@ -33,14 +40,19 @@ make_colData <- function(counts) {
   
   return(coldata)
 }
+```
 
-
+reading in counts matrix data and making colData
+```{r}
 # make counts matrix
 counts_matrix <- make_counts('results/full_verse_concat_filtered.csv')
 
 #make column data matrix
 coldata <- make_colData(counts_matrix)
+```
 
+Running DESeq using DESeqDataSetFromMatrix to compare timepoints
+```{r}
 # Run DESeq, comparing p0 and AD timepoints and generate a tibble containing the results
 dds <- DESeqDataSetFromMatrix(countData = counts_matrix, colData = coldata, design = ~time)
 dds <- DESeq(dds)
@@ -51,12 +63,230 @@ resOrdered <- res[order(res$pvalue),] %>%
   as_tibble(rownames='geneids')
 
 # read in id2gene file
-id2gene <- read_delim('results/full_id2gene.txt', col_names=c('geneids', 'genenames'), sep="\t)
+id2gene <- read.table('results/full_id2gene.txt')
+names(id2gene) <- c("geneids", "genenames")
 
 # Join the gene names into the results tibble while preserving all of the original information in the results
 resWGeneid <- resOrdered %>% 
   left_join(id2gene, by='geneids') %>% 
   select(geneids, genenames, padj, log2FoldChange)
+```
+
+
+FGSEA ANALYSIS
+```{r}
+make_ranked_log2fc <- function(gene_results) {
+  gene_results_no_NA <- drop_na(gene_results)
+  
+  #order genes based on log2FoldChange
+  ranked_genes <- as_tibble(gene_results_no_NA) %>%
+    arrange(desc(log2FoldChange)) %>% 
+    dplyr::select(genenames, log2FoldChange)
+  
+  # Create a list with symbol and log2FoldChange values
+  ranked_genes_vec <- deframe(ranked_genes)
+  
+  return(ranked_genes_vec)
+}
+
+# make ranked gene list
+rnk_list <- make_ranked_log2fc(resWGeneid)
+
+# run fgsea
+gene_set <- fgsea::gmtPathways('m2.all.v2023.2.Mm.symbols.gmt')
+fgsea_results <- fgsea(gene_set, rnk_list, minSize = 15, maxSize= 500)
+fgsea_results <- fgsea_results %>% as_tibble()
+```
+
+recreate figure 1D - D) expression values of representative sarcomere, mitochondrial, and cell cycle genes significantly differentially expressed during in vivo maturation (P0, P4, P7, AD).
+``` {r}
+#investigating 
+top_pathways <- function(fgsea_results, num_paths){
+  fgsea_results <- fgsea_results %>% mutate(
+    NES_plot_status = ifelse(
+      NES < 0, "neg", "pos")
+  )
+  top_ten_pathways <- fgsea_results %>% 
+    arrange(NES)%>%
+    head(num_paths)
+  bottom_ten_pathways <- fgsea_results %>% 
+    arrange(NES)%>%
+    tail(num_paths)
+  pathways <- rbind(top_ten_pathways, bottom_ten_pathways)
+}
+pathways <- top_pathways (fgsea_results, 50)
+View(pathways)
+```
+
+Extracting norm counts
+```{r}
+normalized_counts <- counts(dds, normalized = TRUE)
+print(normalized_counts)
+
+```
+their plot has P0, P4, P7 and AD timepoints -> average of each time point for each gene
+
+```{r}
+
+time_points <- sub("rep\\d+", "", colnames(normalized_counts))
+
+# Create a new matrix to store averaged counts
+averaged_norm_counts <- matrix(NA, nrow = nrow(normalized_counts), ncol = length(unique(time_points)))
+colnames(averaged_norm_counts) <- unique(time_points)
+rownames(averaged_norm_counts) <- rownames(normalized_counts)
+
+# Calculate average counts for each time point
+for (time_point in unique(time_points)) {
+  time_point_columns <- grep(time_point, colnames(normalized_counts))
+  averaged_norm_counts[, time_point] <- rowMeans(normalized_counts[, time_point_columns])
+}
+
+# Print the averaged counts matrix
+print(averaged_norm_counts)
+```
+Adding gene name by gene id
+```{r}
+avg_norm_counts_genes <- averaged_norm_counts %>% 
+  as_tibble(rownames='geneids') %>%
+  left_join(id2gene, by='geneids')
+
+avg_norm_counts_genes <- avg_norm_counts_genes[, -1] %>%
+  select(genenames, everything())
+
+print(avg_norm_counts_genes)
 
 ```
 
+Isolating counts 
+list from paper 
+  Mitochondria: Mpc1, Prdx3, Acat1, Echs1, Slc25a11, Phyh
+  Cell cycle: Cdc7, E2f8, Cdk7, Cdc26, Cdc6, E2f1, Cdc27, Bora, Cdc45, Rad51, Aurkb, Cdc23
+  Sarcomere: Pdlim5, Pygm, Myoz2, Des, Csrp3, Tcap, Cryab
+  
+```{r}
+#filter norm counts results for mitochondrial genes
+mitochon_genes = c('Mpc1', 'Prdx3', 'Acat1', 'Echs1', 'Slc25a11', 'Phyh')
+mitochon_counts_results <- avg_norm_counts_genes %>%
+  filter(genenames %in% mitochon_genes)
+
+print(mitochon_counts_results)
+
+#filter norma counts results for cell cycle genes
+cell_cycle_genes = c('Cdc7', 'E2f8', 'Cdk7', 'Cdc26', 'Cdc6', 'E2f1', 'Cdc27', 'Bora', 'Cdc45', 'Rad51', 'Aurkb', 'Cdc23')
+cell_cycle_counts_results <- avg_norm_counts_genes %>%
+  filter(genenames %in% cell_cycle_genes)
+
+print(cell_cycle_counts_results)
+
+#filter norm counts results for sarcomere genes
+sarcomere_genes = c('Pdlim5', 'Pygm', 'Myoz2', 'Des', 'Csrp3', 'Tcap', 'Cryab')
+sarcomere_counts_results <- avg_norm_counts_genes %>%
+  filter(genenames %in% sarcomere_genes)
+
+print(sarcomere_counts_results)
+
+```
+plotting
+```{r}
+#need to pivot longer
+mitochon_counts_results_longer <- mitochon_counts_results %>%
+  pivot_longer(cols = -genenames, names_to = "time_point", values_to = "normalized_count")
+print(mitochon_counts_results_longer)
+
+cell_cycle_counts_results_longer <- cell_cycle_counts_results %>%
+  pivot_longer(cols = -genenames, names_to = "time_point", values_to = "normalized_count")
+print(cell_cycle_counts_results_longer)
+
+sarcomere_counts_results_longer <- sarcomere_counts_results %>%
+  pivot_longer(cols = -genenames, names_to = "time_point", values_to = "normalized_count")
+print(sarcomere_counts_results_longer)
+```
+```{r}
+# Plot using ggplot2
+# Define numeric values for time points
+time_point_numeric <- c(P0 = 1, P4 = 2, P7 = 3, AD = 4)
+
+# Convert time_point to numeric based on the defined values
+mitochon_counts_results_longer <- mitochon_counts_results_longer %>%
+  mutate(time_point_numeric = time_point %>% factor(levels = c("P0", "P4", "P7", "AD")) %>% as.numeric())
+
+# Convert time_point to numeric based on the defined values
+cell_cycle_counts_results_longer <- cell_cycle_counts_results_longer %>%
+  mutate(time_point_numeric = time_point %>% factor(levels = c("P0", "P4", "P7", "AD")) %>% as.numeric())
+
+# Convert time_point to numeric based on the defined values
+sarcomere_counts_results_longer <- sarcomere_counts_results_longer %>%
+  mutate(time_point_numeric = time_point %>% factor(levels = c("P0", "P4", "P7", "AD")) %>% as.numeric())
+
+# Set fixed margins for plot titles
+theme_title_fixed <- function(title_size = 12, margin_top = 0.5, margin_bottom = 0.5) {
+  theme(
+    plot.title = element_text(size = title_size, margin = margin(margin_top, 0, margin_bottom, 0))
+  )
+}
+
+# Plot with ordered time points
+
+plot1 <- ggplot(data = sarcomere_counts_results_longer, aes(x = time_point_numeric, y = normalized_count, color = genenames)) +
+  geom_point() + 
+  geom_line() +
+  scale_x_continuous(breaks = c(1, 2, 3, 4), labels = c("P0", "P4", "P7", "AD")) +  # Set x-axis labels
+  labs(x = "Time Point", y = "Normalized Count", color = "Gene", title= "Sarcomere") +
+  theme_minimal() + 
+  theme(legend.key.size = unit(0.3, "cm"),
+        legend.spacing.x = unit(0.05, "cm"),  # Adjust horizontal spacing
+        legend.spacing.y = unit(0.05, "cm"))   # Adjust vertical spacing)
+
+
+plot2 <- ggplot(data = mitochon_counts_results_longer, aes(x = time_point_numeric, y = normalized_count, color = genenames)) +
+  geom_point() + 
+  geom_line() +
+  scale_x_continuous(breaks = c(1, 2, 3, 4), labels = c("P0", "P4", "P7", "AD")) +  # Set x-axis labels
+  labs(x = "Time Point", y = "Normalized Count", color = "Gene", title= "Mitochondria") +
+  theme_minimal()+ 
+  theme(legend.key.size = unit(0.3, "cm"),
+        legend.spacing.x = unit(0.05, "cm"),  # Adjust horizontal spacing
+        legend.spacing.y = unit(0.05, "cm"))
+
+plot3 <- ggplot(data = cell_cycle_counts_results_longer, aes(x = time_point_numeric, y = normalized_count, color = genenames)) +
+  geom_point() + 
+  geom_line() +
+  scale_x_continuous(breaks = c(1, 2, 3, 4), labels = c("P0", "P4", "P7", "AD")) +  # Set x-axis labels
+  labs(x = "Time Point", y = "Normalized Count", color = "Gene", title= "Cell Cycle") +
+  theme_minimal()+ 
+  theme(legend.key.size = unit(0.05, "cm"),
+        legend.spacing.x = unit(0.05, "cm"),  # Adjust horizontal spacing
+        legend.spacing.y = unit(0.05, "cm"))
+
+# Arrange plots vertically
+grid.arrange(plot1, plot2, plot3, ncol = 1)
+
+```
+individual plots
+
+
+```{r}
+
+ggplot(data = sarcomere_counts_results_longer, aes(x = time_point_numeric, y = normalized_count, color = genenames)) +
+  geom_point() + 
+  geom_line() +
+  scale_x_continuous(breaks = c(1, 2, 3, 4), labels = c("P0", "P4", "P7", "AD")) +  # Set x-axis labels
+  labs(x = "Time Point", y = "Normalized Count", color = "Gene", title= "Sarcomere") +
+  theme_minimal()
+
+
+ggplot(data = mitochon_counts_results_longer, aes(x = time_point_numeric, y = normalized_count, color = genenames)) +
+  geom_point() + 
+  geom_line() +
+  scale_x_continuous(breaks = c(1, 2, 3, 4), labels = c("P0", "P4", "P7", "AD")) +  # Set x-axis labels
+  labs(x = "Time Point", y = "Normalized Count", color = "Gene", title= "Mitochondria") +
+  theme_minimal()
+
+ggplot(data = cell_cycle_counts_results_longer, aes(x = time_point_numeric, y = normalized_count, color = genenames)) +
+  geom_point() + 
+  geom_line() +
+  scale_x_continuous(breaks = c(1, 2, 3, 4), labels = c("P0", "P4", "P7", "AD")) +  # Set x-axis labels
+  labs(x = "Time Point", y = "Normalized Count", color = "Gene", title= "Cell Cycle") +
+  theme_minimal()
+
+```
